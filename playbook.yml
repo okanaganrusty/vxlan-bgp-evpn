@@ -1,0 +1,91 @@
+---
+- name: vtep Playbook
+  hosts: vtep
+  become: true
+  become_user: root
+  tasks:
+      - name: Disable swap
+        shell: |
+            swapoff -a
+
+      - name: Disable swap in fstab
+        replace:
+            path: /etc/fstab
+            regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+            replace: '# \1'
+
+      - name: Inject /etc/sysctl.d/99-ip_forward.conf
+        sysctl:
+            sysctl_file: /etc/sysctl.d/99-ip_forward.conf
+            state: present
+            reload: yes
+            name: "{{ item }}"
+            value: 1
+        with_items:
+            - net.ipv4.ip_forward
+
+      - name: Install apt packages
+        apt:
+            name: "{{ item }}"
+        with_items:
+            - apt-transport-https
+            - bridge-utils
+            - ca-certificates
+            - curl
+            - iproute2
+            - frr
+
+      - name: FRR
+        block:
+            - name: Enable FRR BGP daemon
+              replace:
+                  path: /etc/frr/daemons
+                  regexp: "^bgpd=no"
+                  replace: "bgpd=yes"
+
+            - name: Configure FRR
+              shell: |
+                  cat <<'EOF'>/etc/frr/frr.conf
+                  router bgp 65535
+                    bgp router-id {{ ansible_default_ipv4.address|default(ansible_all_ipv4_addresses[0]) }}
+                    no bgp default ipv4-unicast
+                    neighbor vxlan_fabric peer-group
+                    neighbor vxlan_fabric remote-as 65535
+                    neighbor vxlan_fabric capability extended-nexthop
+                    neighbor 172.16.0.1 peer-group vxlan_fabric
+                    !
+                    address-family l2vpn evpn
+                      neighbor vxlan_fabric activate
+                      advertise-all-vni
+                    exit-address-family
+                    !
+                  !
+                  EOF
+
+            - name: Start the BGP daemon
+              systemd:
+                  name: frr
+                  state: restarted
+
+      - name: Configure VLANs
+        with_items: [100, 101, 102]
+        shell: |
+            # ip -4 link add vxlan{{ item }} type vxlan id {{ item }} dstport 4789 local {{ ansible_default_ipv4.address|default(ansible_all_ipv4_addresses[0]) }} group 239.255.255.{{ item }} dev enp1s0 ttl 5 || true
+            ip -4 link add vxlan{{ item }} type vxlan id {{ item }} dstport 4789 local {{ ansible_default_ipv4.address|default(ansible_all_ipv4_addresses[0]) }} nolearning dev enp1s0 ttl 5 || true
+            # ip -4 link add dummy{{ item }} type dummy || true
+
+            # Create the bridge, and add dummy and vxlan interface
+            brctl addbr br{{ item }} || true
+            # brctl addif br{{ item }} dummy{{ item }} || true
+            brctl addif br{{ item }} vxlan{{ item }} || true
+
+            # Add an IP address to the dummy interface within the bridge
+            ip address replace 10.10.{{ item }}.{{ play_hosts.index(inventory_hostname) + 1 }}/24 dev br{{ item }} || true
+
+            # Disable spanning tree on the bridge, as there is only one possible root/designated port
+            brctl stp br{{ item }} off || true
+
+            # Bring up the dummy, vxlan and bridge interfaces
+            # ip -4 link set up dev dummy{{ item }} || true
+            ip -4 link set up dev br{{ item }} || true
+            ip -4 link set up dev vxlan{{ item }} || true

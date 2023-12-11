@@ -1,0 +1,17 @@
+<network>
+  <name>default</name>
+  <uuid>b030df2f-4daa-4174-b897-544f82501fc0</uuid>
+  <forward dev='br0' mode='route'>
+    <interface dev='br0'/>
+  </forward>
+  <bridge name='virbr0' stp='on' delay='0'/>
+  <mac address='52:54:00:10:3d:6e'/>
+  <ip address='172.16.0.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='172.16.0.200' end='172.16.0.254'/>
+      <host mac='52:54:00:f1:7e:f1' name='vtep1' ip='172.16.0.50'/>
+      <host mac='52:54:00:10:9c:92' name='vtep2' ip='172.16.0.51'/>
+      <host mac='52:54:00:99:c3:33' name='vtep3' ip='172.16.0.52'/>
+    </dhcp>
+  </ip>
+</network>
